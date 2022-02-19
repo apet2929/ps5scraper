@@ -121,22 +121,20 @@ def get_page_html(driver):
     elem = driver.find_element(By.XPATH, "//*")
     return elem.get_attribute("outerHTML")
 
-
-def alert_by_text(message_body):
+def send_texts(text_body, phone_nums):
     SSID = os.getenv("SSID")
     AUTH_TOKEN = os.getenv("AUTH_TOKEN")
     MY_PHONE_NUM = os.getenv("MY_PHONE_NUM")
-    TO_PHONE_NUM = os.getenv("TEMP_PHONE_NUM")
-
     client = Client(SSID, AUTH_TOKEN)
-    client.messages.create(
-        to=TO_PHONE_NUM,
-        from_=MY_PHONE_NUM,
-        body=message_body
-    )
+    for num in phone_nums:
+        client.messages.create(
+            to=num,
+            from_=MY_PHONE_NUM,
+            body=text_body
+        )
 
-def get_body(city, stock_level):
-    return f'The PS5 is available in {city}! The stock level is: {stock_level}'
+def get_body(location_name, stock_level):
+    return f'The PS5 is available in {location_name}! The stock level is: {stock_level}'
 
 
 def get_html_from_file():
@@ -163,6 +161,7 @@ def strip_stuff(string):
 def main():    
     print("Setup begin")
     driver = setup_selenium()
+    target_phone_numbers = [os.getenv("TEMP_PHONE_NUM"), os.getenv("TO_PHONE_NUM")]
     print("Setup complete")
     
     start(driver)
@@ -173,12 +172,21 @@ def main():
         def callback(name, stock):
             if(stock != "Out Of Stock"):
                 print("Not out of stock!", stock)
-                alert_by_text(get_body(name, stock))
+                send_texts(get_body(name, stock), target_phone_numbers)
                 quit()
+                
         get_data_from_html(html, callback_function=callback)
         print("None in stock\n")
         sleep(3)
         
+def test():
+    with open("page.html", "r", encoding="utf-8") as page:
+        html = page.read()
+    def callback(name, stock):
+        if(stock != "Out Of Stock"):
+            print("Not out of stock!", stock, name)
+
+    get_data_from_html(html, callback_function=callback)
 
 if __name__ == "__main__":
     multiprocessing.freeze_support()
