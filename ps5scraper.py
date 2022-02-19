@@ -209,9 +209,9 @@ def test():
 
 if __name__ == "__main__":
     multiprocessing.freeze_support()
-    load_dotenv()
 
     try:
+        load_dotenv()
         main()
     except Exception:
         import traceback
