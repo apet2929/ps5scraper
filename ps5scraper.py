@@ -16,11 +16,14 @@ from selenium.webdriver.common.desired_capabilities import DesiredCapabilities
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.remote.webelement import WebElement
 from selenium.webdriver.support.ui import WebDriverWait
+from selenium.common.exceptions import TimeoutException
 import logging
 import multiprocessing
 
 import undetected_chromedriver as uc 
 
+class InStockException(Exception):
+    pass
 
 def resource_path(relative_path):
     try:
@@ -75,6 +78,9 @@ def start(driver: Chrome):
         wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, ".cookieProcessed")))
         elem = driver.find_element(By.CSS_SELECTOR,".cookieProcessed")
         elem.click()
+    except TimeoutException:
+        # Cookie popup not showing
+        pass    
     except:
         regain_focus(elem)
         pass
@@ -160,24 +166,37 @@ def strip_stuff(string):
 
 def main():    
     print("Setup begin")
-    driver = setup_selenium()
+    driver: Chrome = setup_selenium()
     target_phone_numbers = [os.getenv("TEMP_PHONE_NUM"), os.getenv("TO_PHONE_NUM")]
     print("Setup complete")
     
-    start(driver)
-    while True:
-        print("Checking for stock availability")
-        html = refresh(driver)
+    run = True
+    while run:
+        try:
+            print("Starting")
+            start(driver)
+            while True:
+                print("Checking for stock availability")
+                html = refresh(driver)
 
-        def callback(name, stock):
-            if(stock != "Out Of Stock"):
-                print("Not out of stock!", stock)
-                send_texts(get_body(name, stock), target_phone_numbers)
-                quit()
-                
-        get_data_from_html(html, callback_function=callback)
-        print("None in stock\n")
-        sleep(3)
+                def callback(name, stock):
+                    if(stock != "Out Of Stock"):
+                        print("Not out of stock!", stock)
+                        send_texts(get_body(name, stock), target_phone_numbers)
+                        raise InStockException(get_body(name, stock))
+
+                get_data_from_html(html, callback_function=callback)
+                print("None in stock\n")
+                sleep(3)
+        except KeyboardInterrupt as e:
+            run = False
+            quit()
+        except InStockException as e:
+            print(e)
+            run = False
+        except Exception as e:
+            print(e)
+            # Continue execution
         
 def test():
     with open("page.html", "r", encoding="utf-8") as page:
