@@ -1,5 +1,7 @@
+from datetime import datetime
+from json import JSONDecoder
 import re
-from time import sleep
+from time import sleep, time
 import os
 from twilio.rest import Client
 from dotenv import load_dotenv 
@@ -19,6 +21,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.common.exceptions import TimeoutException
 import logging
 import multiprocessing
+import requests
 
 import undetected_chromedriver as uc 
 
@@ -37,8 +40,8 @@ def resource_path(relative_path):
 def setup_selenium() -> selenium.webdriver.Chrome:
     # # Options
     # options = selenium.webdriver.ChromeOptions()
-    # # options.add_argument("--incognito") #   Disables caching
-    # # options.add_argument('--headless')  # Makes the window invisible
+    # # options.add_argument("--incognito") #   Disables caching/
+    # options.add_argument('--headless')  # Makes the window invisible
 
     # # Disable logging            
     # options.add_argument("--log-level=OFF")
@@ -58,7 +61,10 @@ def setup_selenium() -> selenium.webdriver.Chrome:
     d['goog:loggingPrefs'] = {'browser': 'ALL'}
     print("Initializing Chromedriver")
 
-    driver = uc.Chrome(desired_capabilities=d)
+    options = uc.ChromeOptions()
+    # options.add_argument("--incognito") #   Disables caching
+    # options.add_argument('--headless')  # Makes the window invisible
+    driver = uc.Chrome(desired_capabilities=d, options=options)
     
     print("Chromedriver initialization success!")
     # driver = selenium.webdriver.Chrome(resource_path("assets/chromedriver.exe"), options=options, desired_capabilities=d)
@@ -72,55 +78,18 @@ def setup_selenium() -> selenium.webdriver.Chrome:
     return driver
 
 def start(driver: Chrome):
+    wait = WebDriverWait(driver, 20)
     driver.get("https://www.smythstoys.com/uk/en-gb/video-games-and-tablets/playstation-5/playstation-5-consoles/playstation-5-digital-edition-console/p/191430")
-    wait = WebDriverWait(driver, 10)
-    try:
-        wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, ".cookieProcessed")))
-        elem = driver.find_element(By.CSS_SELECTOR,".cookieProcessed")
-        elem.click()
-    except TimeoutException:
-        # Cookie popup not showing
-        pass    
-    except:
-        regain_focus(elem)
-        pass
+    wait.until(EC.title_is("PlayStation 5 Digital Edition Console | Smyths Toys UK"))
 
-def regain_focus(element):
-    element.find_element_by_xpath("./ancestor::div[@class='row']").click()
 
-def refresh(driver: Chrome):
-    driver.refresh()
-    wait = WebDriverWait(driver, 10)
-    try:
-        wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, "#product_191430")))
-    except:
-        driver.refresh()
-        wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, "#product_191430")))
-
-    trying = True
-
-    while trying:
-        try:
-            print("Trying to click on 'List stores' button")
-            elem = driver.find_element(By.CSS_SELECTOR,"#product_191430")
-            elem.click()
-            print("Button clicked, finding table")
-        except:
-            regain_focus(elem)
-        try:
-            elem = driver.find_element(By.XPATH ,"/html/body/div[11]/div[1]/div[2]/div[2]/div[1]/div/div/div/div[1]/div/div/div[3]/ul")
-            trying = False
-        except:
-            regain_focus(elem)
-
-    try:
-        wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "li.pickup-store-list-entry:nth-child(1)")))
-    except:
-        regain_focus(elem)
-        wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "li.pickup-store-list-entry:nth-child(1)")))
-
+def check_blocked(driver):
     html = get_page_html(driver)
-    return html
+    if "Request unsuccessful." in html:
+        write_output(html)
+        return True
+    return False
+
 
 def get_page_html(driver):
     # TODO : Figure out why this sometimes messes up
@@ -148,46 +117,125 @@ def get_html_from_file():
         html = saved.read()
     return html
 
-def get_data_from_html(html, callback_function):
-    soup = BeautifulSoup(html, "html.parser")
-    locations = list(soup.find_all(class_="pickup-store-list-entry"))
-    for location in locations:
-        name, stock = get_location_data(location)
-        callback_function(name, stock)
+def do_request(headers, cookies, data):
+    response = requests.post('https://www.smythstoys.com/uk/en-gb/store-pickup/191430/pointOfServices', headers=headers, cookies=cookies, data=data)
 
-def get_location_data(location):
-    name = location.find(class_="pickup-store-list-entry-name")
-    stock = location.find(class_="resultStock")
+    write_output("request_response", response.text)
+    return response
+        
+def parse_json(json):
+    d = json["data"]
 
-    return (strip_stuff(name.text).strip(), strip_stuff(stock.text).strip())
+    # print(str(data))
+    
 
-def strip_stuff(string):
-    return re.sub('\s+',' ',string)
+    locationStatusList = []
+    for i in range(len(d)):
+        data = d[i]
+        location = data["name"]
+        status = data["stockLevelStatusCode"]
+        locationStatusList.append((location, status))
 
-def main():    
+    return locationStatusList
+
+def get_CSRF_token(driver: Chrome):
+    elem = driver.find_element(By.CSS_SELECTOR, "form.add_to_cart_form:nth-child(2) > div:nth-child(15) > input:nth-child(1)")
+    assert elem.get_attribute("name") == "CSRFToken"
+    return elem.get_attribute("value")
+
+def get_request_data(driver: Chrome):
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:97.0) Gecko/20100101 Firefox/97.0',
+        'Accept': '*/*',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+        'X-Requested-With': 'XMLHttpRequest',
+        'Origin': 'https://www.smythstoys.com',
+        'DNT': '1',
+        'Connection': 'keep-alive',
+        'Referer': 'https://www.smythstoys.com/uk/en-gb/video-games-and-tablets/playstation-5/playstation-5-consoles/playstation-5-digital-edition-console/p/191430',
+        'Sec-Fetch-Dest': 'empty',
+        'Sec-Fetch-Mode': 'cors',
+        'Sec-Fetch-Site': 'same-origin',
+    }
+    _cookies = driver.get_cookies()
+    cookies = {}
+    for cookie in _cookies:
+        cookies[cookie["name"]] = cookie["value"]
+
+    data = {
+        'cartPage': 'false',
+        'entryNumber': '0',
+        'latitude': '',
+        'longitude': '',
+        'searchThroughGeoPointFirst': 'false',
+        'xaaLandingStores': 'false',
+        'CSRFToken': get_CSRF_token(driver)
+    }
+    return (headers, cookies, data)
+
+def check_in_stock(locationStatusList, callback):
+    
+    for location, status in locationStatusList:
+        if(status != "outOfStock"):
+            callback(location, status)
+            return True
+    return False
+
+def new_main():
     print("Setup begin")
-    driver: Chrome = setup_selenium()
+    
+    try:
+        driver: Chrome = setup_selenium()
+    except:
+        driver: Chrome = setup_selenium()
+
     target_phone_numbers = [os.getenv("TEMP_PHONE_NUM"), os.getenv("TO_PHONE_NUM")]
     print("Setup complete")
     
     run = True
     while run:
         try:
-            print("Starting")
+            current_time = datetime.now()
+            print(f"Starting, time = {str(current_time)} start time = {str(start_time)}")
             start(driver)
-            while True:
-                print("Checking for stock availability")
-                html = refresh(driver)
+            if(check_blocked(driver)):
+                print("We got blocked!")
+                log_error_time(start_time, current_time)
+                quit()
+            
+            continue_same_session = True
+            while continue_same_session:
+                print("Getting request data")
+                headers, cookies, data = get_request_data(driver)
+                write_output("request_data", f"{str(headers)}\n{str(cookies)}\n{str(data)}")
+                print("Sending request")
+                response = do_request(headers, cookies, data)
+                
+                continue_same_session = response.status_code == 200
+                if response.status_code != 200:
+                    print("We got blocked!")
+                    print(response.status_code, response.text)
+                    log_error_time(start_time, current_time)
+                
+                print("Parsing JSON")
+                json = JSONDecoder().decode(response.text)
+                locationStatusList = parse_json(json)
+            
 
                 def callback(name, stock):
-                    if(stock != "Out Of Stock"):
+                    if(stock != "outOfStock"):
                         print("Not out of stock!", stock)
                         send_texts(get_body(name, stock), target_phone_numbers)
                         raise InStockException(get_body(name, stock))
+                print("Checking stock level")
+                if not check_in_stock(locationStatusList, callback=callback):
+                    print("None in stock")
 
-                get_data_from_html(html, callback_function=callback)
-                print("None in stock\n")
-                sleep(3)
+                sleep(10)
+
+
         except KeyboardInterrupt as e:
             run = False
             quit()
@@ -197,22 +245,32 @@ def main():
         except Exception as e:
             print(e)
             # Continue execution
-        
-def test():
-    with open("page.html", "r", encoding="utf-8") as page:
-        html = page.read()
-    def callback(name, stock):
-        if(stock != "Out Of Stock"):
-            print("Not out of stock!", stock, name)
 
-    get_data_from_html(html, callback_function=callback)
+
+def test():
+    with open("request_response.txt", "r", encoding="utf-8") as response:
+        json = JSONDecoder().decode(response.read())
+    
+    # parse_json(json)
+    print(parse_json(json))
+    quit()
+
+def write_output(file_name, content):
+    with open(f"{file_name}.txt", "w", encoding="utf-8") as file:
+        file.write(content)
+
+def log_error_time(start_time, end_time):
+    with open("errorLog.txt", "a") as logFile:
+        logFile.write(f"We got blocked! Start time = {str(start_time)} end time = {str(end_time)}")
 
 if __name__ == "__main__":
     multiprocessing.freeze_support()
 
+    start_time = datetime.now()
+
     try:
         load_dotenv()
-        main()
+        new_main()
     except Exception:
         import traceback
         traceback.print_exc()
